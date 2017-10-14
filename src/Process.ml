@@ -95,7 +95,7 @@ let first_observable_graph litmustest_string uarch_string =
     | PipeGraph.Some (PipeGraph.Pair (g, a)) ->
       let stage_names = PipeGraph.stageNames processor in
       let graph =
-        PipeGraph.graphvizCompressedGraph "" stage_names g [] a in
+        PipeGraph.graphvizCompressedGraph "" stage_names g [] in
       (true, List.fold_left (^) "" graph)
     | PipeGraph.None -> (false, "(not observable)")
   in

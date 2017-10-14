@@ -45,6 +45,21 @@ Definition Printf
   : A :=
   x.
 
+(* Print out RTL properties... *)
+Definition RTLPrintInternal
+  {A : Type}
+  (x : A)
+  (s : string)
+  : A :=
+  x.
+
+Definition RTLPrint
+  {A : Type}
+  (x : A)
+  (l : list string)
+  : A :=
+  RTLPrintInternal x (StringOf (app l [newline])).
+
 Definition PrintfFlush
   {A : Type}
   (x : A)

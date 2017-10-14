@@ -9,6 +9,8 @@ Require Import PipeGraph.Instruction.
 Require Import PipeGraph.Graph.
 Require Import PipeGraph.FOLPredicate.
 Require Import PipeGraph.GraphvizCompressed.
+Require Import PipeGraph.ConstraintTreeTypes.
+Require Import PipeGraph.VscaleMappings.
 
 Open Scope string_scope.
 
@@ -21,18 +23,6 @@ Definition beq_edge
   | ((a1, a2, a3, a4), (b1, b2, b3, b4)) =>
       andb (beq_node a1 b1) (beq_node a2 b2)
   end.
-
-
-
-Inductive ScenarioTree : Set :=
-| ScenarioName : string -> ScenarioTree -> ScenarioTree
-| ScenarioAnd : ScenarioTree -> ScenarioTree -> ScenarioTree
-| ScenarioOr : ScenarioTree -> ScenarioTree -> ScenarioTree
-| ScenarioEdgeLeaf : list GraphEdge -> ScenarioTree
-| ScenarioNodeLeaf : list GraphNode -> ScenarioTree
-| ScenarioNotNodeLeaf : list GraphNode -> ScenarioTree
-| ScenarioTrue : ScenarioTree
-| ScenarioFalse : ScenarioTree.
 
 Fixpoint FlipEdgesHelper
   (l r : list GraphEdge)
@@ -92,11 +82,12 @@ Fixpoint ScenarioTreeEdgeCountGraphHelper
   (n : option (list string))
   : nat * nat :=
   match t with
-  | ScenarioName n'' t' =>
+  | ScenarioName n'' t' | ScenarioAxiomName n'' t' =>
      match n with
      | Some n' => ScenarioTreeEdgeCountGraphHelper ac t' id (Some (n'' :: n'))
      | None => ScenarioTreeEdgeCountGraphHelper ac t' id (Some [n''])
      end
+  | ScenarioNotEdgeLeaf l
   | ScenarioEdgeLeaf l =>
       let result := (1, id) in
       Println result ["  n"; stringOfNat id; " [shape=";
@@ -157,6 +148,10 @@ Fixpoint ScenarioTreeEdgeCountGraphHelper
       let result := Println result ["  n"; stringOfNat (S b_id); " -> n";
         stringOfNat b_id; ";"] in
       result
+  | ScenarioLoadConstraint _ _ _ =>
+      let result := (1, id) in
+      Println result ["  n"; stringOfNat id; " [shape=";
+        if ac then "box" else "oval"; ",label=""LoadConstraint""];"]
   | ScenarioTrue =>
       let result := (1, id) in
       Println result ["  n"; stringOfNat id; " [shape=";
@@ -191,14 +186,16 @@ Fixpoint ReducesToTrue
   (t : ScenarioTree)
   : bool :=
   match t with
-  | ScenarioName _ t' => ReducesToTrue t'
+  | ScenarioName _ t' | ScenarioAxiomName _ t' => ReducesToTrue t'
   | ScenarioEdgeLeaf [] => true
   | ScenarioEdgeLeaf _ => false
+  | ScenarioNotEdgeLeaf _ => false
   | ScenarioNodeLeaf [] => true
   | ScenarioNodeLeaf _ => false
   | ScenarioNotNodeLeaf _ => false
   | ScenarioAnd a b => andb (ReducesToTrue a) (ReducesToTrue b)
   | ScenarioOr a b => orb (ReducesToTrue a) (ReducesToTrue b)
+  | ScenarioLoadConstraint _ _ _ => false
   | ScenarioTrue => true
   | ScenarioFalse => false
   end.
@@ -207,13 +204,16 @@ Fixpoint ReducesToFalse
   (t : ScenarioTree)
   : bool :=
   match t with
-  | ScenarioName _ t' => ReducesToFalse t'
+  | ScenarioName _ t' | ScenarioAxiomName _ t' => ReducesToFalse t'
   | ScenarioEdgeLeaf _ => false
+  | ScenarioNotEdgeLeaf [] => true
+  | ScenarioNotEdgeLeaf _ => false
   | ScenarioNodeLeaf _ => false
   | ScenarioNotNodeLeaf [] => true
   | ScenarioNotNodeLeaf _ => false
   | ScenarioAnd a b => orb (ReducesToFalse a) (ReducesToFalse b)
   | ScenarioOr a b => andb (ReducesToFalse a) (ReducesToFalse b)
+  | ScenarioLoadConstraint _ _ _ => false
   | ScenarioTrue => false
   | ScenarioFalse => true
   end.
@@ -228,10 +228,18 @@ Fixpoint SimplifyScenarioTree
       | ScenarioFalse => ScenarioFalse
       | t'' => ScenarioName n t''
       end
+  | ScenarioAxiomName n t' =>
+      match SimplifyScenarioTree t' with
+      | ScenarioTrue => ScenarioTrue
+      | ScenarioFalse => ScenarioFalse
+      | t'' => ScenarioAxiomName n t''
+      end
   | ScenarioEdgeLeaf [] => ScenarioTrue
   | ScenarioNodeLeaf [] => ScenarioTrue
   | ScenarioNotNodeLeaf [] => ScenarioFalse
   | ScenarioEdgeLeaf l => t
+  | ScenarioNotEdgeLeaf [] => ScenarioFalse
+  | ScenarioNotEdgeLeaf l => t
   | ScenarioNodeLeaf l => t
   | ScenarioNotNodeLeaf l => t
   | ScenarioAnd a b =>
@@ -250,6 +258,7 @@ Fixpoint SimplifyScenarioTree
       if ReducesToFalse a' then b' else
       if ReducesToFalse b' then a' else
       ScenarioOr a' b'
+  | ScenarioLoadConstraint _ _ _ => t
   | ScenarioTrue => t
   | ScenarioFalse => t
   end.
@@ -258,16 +267,18 @@ Fixpoint GuaranteedEdges
   (s : ScenarioTree)
   : (list GraphNode * list GraphNode * list GraphEdge) :=
   match s with
-  | ScenarioName _ s => GuaranteedEdges s
+  | ScenarioName _ s | ScenarioAxiomName _ s => GuaranteedEdges s
   | ScenarioNodeLeaf l => (l, [], [])
   | ScenarioNotNodeLeaf l => ([], l, [])
   | ScenarioEdgeLeaf l => ([], [], l)
+  | ScenarioNotEdgeLeaf l => ([], [], []) (* This shouldn't matter cause it's never called by RTL... *)
   | ScenarioAnd a b =>
       match (GuaranteedEdges a, GuaranteedEdges b) with
       | ((a1, a2, a3), (b1, b2, b3)) =>
           (app_rev a1 b1, app_rev a2 b2, app_rev a3 b3)
       end
   | ScenarioOr _ _ => ([], [], [])
+  | ScenarioLoadConstraint _ _ _ => ([], [], [])
   | ScenarioTrue => ([], [], [])
   | ScenarioFalse => Warning ([], [], [])
       ["Shouldn't try to calculate the GuaranteedEdges of FALSE"]
@@ -277,9 +288,10 @@ Fixpoint FindBranchingEdges
   (s : ScenarioTree)
   : option (list (list GraphEdge)) :=
   match s with
-  | ScenarioName _ s => FindBranchingEdges s
+  | ScenarioName _ s | ScenarioAxiomName _ s => FindBranchingEdges s
   | ScenarioEdgeLeaf [] => None
   | ScenarioEdgeLeaf l => Some ([l])
+  | ScenarioNotEdgeLeaf l => None (* This shouldn't matter cause it's never called by RTL... *)
   | ScenarioNodeLeaf l => Some []
   | ScenarioNotNodeLeaf l => Some []
   | ScenarioAnd a b =>
@@ -309,6 +321,7 @@ Fixpoint FindBranchingEdges
           | Some l' => Some (app_rev l l')
           end
       end
+  | ScenarioLoadConstraint _ _ _ => None
   | ScenarioTrue => None
   | ScenarioFalse => None
   end.
@@ -950,6 +963,7 @@ Definition ThreadQuantifier
 
 Inductive FOLFormula :=
 | FOLName : string -> FOLFormula -> FOLFormula
+| FOLAxiomName : string -> FOLFormula -> FOLFormula
 | FOLExpandMacro : string -> list StringOrInt -> FOLFormula
 | FOLPredicate : FOLPredicateType -> FOLFormula
 | FOLNot : FOLFormula -> FOLFormula
@@ -967,14 +981,14 @@ Fixpoint stringOfFOLFormulaHelper
   match n with
   | S n' =>
       match f with
-      | FOLName s f => StringOf ["("; s; ":(";
+      | FOLName s f | FOLAxiomName s f => StringOf ["("; s; ":(";
           stringOfFOLFormulaHelper n' (S depth) f; "))"]
       | FOLExpandMacro s l => StringOf ["ExpandMacro "; s]
       | FOLPredicate p => stringOfPredicate false p
       | FOLNot f' => StringOf ["~("; stringOfNat depth; ")(";
           stringOfFOLFormulaHelper n' (S depth) f'; ")"]
       | FOLOr a b =>
-          StringOf ["("; stringOfFOLFormulaHelper n' (S depth) a; ") \";
+          StringOf ["("; stringOfFOLFormulaHelper n' (S depth) a; ") \\";
             stringOfNat depth ; "/ (";
             stringOfFOLFormulaHelper n' (S depth) b; ")"]
       | FOLAnd a b =>
@@ -993,7 +1007,7 @@ Fixpoint stringOfFOLFormulaHelper
       end
   | O =>
       match f with
-      | FOLName s f' => s
+      | FOLName s f' | FOLAxiomName s f' => s
       | FOLExpandMacro s l => StringOf ["ExpandMacro "; s]
       | FOLPredicate p => stringOfPredicate false p
       | FOLNot f' => "~(...)"
@@ -1016,7 +1030,7 @@ Fixpoint PrintGraphvizStringOfFOLFormulaHelper
   (f : FOLFormula)
   : nat :=
   match f with
-  | FOLName s f' =>
+  | FOLName s f' | FOLAxiomName s f' =>
       let id' := PrintGraphvizStringOfFOLFormulaHelper id f' in
       let result := S id' in
       let result := Println result
@@ -1130,8 +1144,24 @@ Definition FoldFlipNode
   : ScenarioTree :=
   ScenarioOr t (ScenarioNotNodeLeaf [n]).
 
+Definition GetLoadConstraintNonInitial
+  (negate : bool)
+  (a b : Microop)
+  : ScenarioTree :=
+  match access a, access b with
+  | Read _ _ _ _, Write _ _ _ wd => ScenarioLoadConstraint a wd negate
+  | Write _ _ _ wd, Read  _ _ _ _ => ScenarioLoadConstraint b wd negate
+  | Write _ _ _ _, Write _ _ _ _ => if SameData a b then 
+                                        if negate then ScenarioFalse else ScenarioTrue
+                                    else
+                                        if negate then ScenarioTrue else ScenarioFalse
+  | Read _ _ _ _, Read  _ _ _ _ => Warning ScenarioFalse ["loads sourcing loads"]
+  | _, _ => Warning ScenarioFalse ["Something other than reads and writes passed to GetLoadConstraintNonInitial!"]
+  end.
+
 Fixpoint EliminateQuantifiersHelper
   (demorgan : bool)
+  (simp_data : bool)
   (stage_names : list (list string))
   (s : FOLState)
   (f : FOLFormula)
@@ -1139,43 +1169,79 @@ Fixpoint EliminateQuantifiersHelper
   : ScenarioTree :=
   match f with
   | FOLName n f =>
-      ScenarioName n (EliminateQuantifiersHelper demorgan stage_names s f l)
+      ScenarioName n (EliminateQuantifiersHelper demorgan simp_data stage_names s f l)
+  | FOLAxiomName n f =>
+      ScenarioAxiomName n (EliminateQuantifiersHelper demorgan simp_data stage_names s f l)
   | FOLExpandMacro m _ => Warning ScenarioFalse
       ["Internal error: macro "; m; " should have been expanded!"]
   | FOLPredicate p  =>
-      match (demorgan, EvaluatePredicate stage_names p l s) with
-      | (false, Some (l1, l2)) =>
-          ScenarioAnd (ScenarioNodeLeaf l1) (ScenarioEdgeLeaf l2)
-      | (false, None) => ScenarioFalse
-      | (true, Some (l1, l2)) =>
-          let n := fold_left FoldFlipNode l1 ScenarioFalse in
-          let e := fold_left FoldFlipEdge l2 ScenarioFalse in
-          ScenarioOr n e
-      | (true, None) => ScenarioTrue
-      end
+      let do_eval x y :=
+          match (x, y) with
+          | (true, _) => true
+          | (false, PredSameData _ _) => false
+          | (false, PredDataFromPAInitial _) => false
+          | (false, PredDataFromPAFinal _) => false
+          | (false, _) => true
+          end
+      in
+      if do_eval simp_data p then
+          match (demorgan, EvaluatePredicate stage_names p l s) with
+          | (false, Some (l1, l2)) =>
+              ScenarioAnd (ScenarioNodeLeaf l1) (ScenarioEdgeLeaf l2)
+          | (false, None) => ScenarioFalse
+          | (true, Some (l1, l2)) =>
+              let n := fold_left FoldFlipNode l1 ScenarioFalse in
+              let e := if simp_data then (fold_left FoldFlipEdge l2 ScenarioFalse) else ScenarioNotEdgeLeaf l2 in
+              ScenarioOr n e
+          | (true, None) => ScenarioTrue
+          end
+      else
+          match p with
+          | PredSameData t1 t2 => 
+              match (GetFOLTerm t1 l, GetFOLTerm t2 l) with
+              | (Some (MicroopTerm _ t1'), Some (MicroopTerm _ t2')) =>
+                  GetLoadConstraintNonInitial demorgan t1' t2'
+              | _ => if demorgan then ScenarioTrue else ScenarioFalse
+              end
+          | PredDataFromPAInitial t =>
+              match GetFOLTerm t l with
+              | Some (MicroopTerm _ t') =>
+                  match GetPhysicalAddress t' with
+                  | Some pa =>
+                      match (access t') with
+                      | Read _ _ _ _ => ScenarioLoadConstraint t' (GetInitialCondition (stateInitial s) pa) demorgan
+                      | _ => if demorgan then ScenarioTrue else ScenarioFalse
+                      end
+                  | _ => if demorgan then ScenarioTrue else ScenarioFalse
+                  end
+              | _ => if demorgan then ScenarioTrue else ScenarioFalse
+              end
+          | PredDataFromPAFinal _ => if demorgan then ScenarioTrue else ScenarioFalse (* We do not deal in final conditions in SVA. We tackle all possible cases from a given start state. *)
+          | _ => Warning ScenarioTrue ["Only PredSameData/PredDataFromPAInitial should get here, but we have something else!"]
+          end
   | FOLNot f' =>
-      EliminateQuantifiersHelper (negb demorgan) stage_names s f' l
+      EliminateQuantifiersHelper (negb demorgan) simp_data stage_names s f' l
   | FOLOr a b =>
       if demorgan
       then
-        match (EliminateQuantifiersHelper demorgan stage_names s a l) with
+        match (EliminateQuantifiersHelper demorgan simp_data stage_names s a l) with
         | ScenarioFalse => ScenarioFalse
         | ScenarioTrue =>
-          (EliminateQuantifiersHelper demorgan stage_names s b l)
+          (EliminateQuantifiersHelper demorgan simp_data stage_names s b l)
         | a' =>
-          match (EliminateQuantifiersHelper demorgan stage_names s b l) with
+          match (EliminateQuantifiersHelper demorgan simp_data stage_names s b l) with
           | ScenarioFalse => ScenarioFalse
           | ScenarioTrue => a'
           | b' => ScenarioAnd a' b'
           end
         end
       else
-        match (EliminateQuantifiersHelper demorgan stage_names s a l) with
+        match (EliminateQuantifiersHelper demorgan simp_data stage_names s a l) with
         | ScenarioTrue => ScenarioTrue
         | ScenarioFalse =>
-          (EliminateQuantifiersHelper demorgan stage_names s b l)
+          (EliminateQuantifiersHelper demorgan simp_data stage_names s b l)
         | a' =>
-          match (EliminateQuantifiersHelper demorgan stage_names s b l) with
+          match (EliminateQuantifiersHelper demorgan simp_data stage_names s b l) with
           | ScenarioTrue => ScenarioTrue
           | ScenarioFalse => a'
           | b' => ScenarioOr a' b'
@@ -1184,24 +1250,24 @@ Fixpoint EliminateQuantifiersHelper
   | FOLAnd a b =>
       if negb demorgan
       then
-        match (EliminateQuantifiersHelper demorgan stage_names s a l) with
+        match (EliminateQuantifiersHelper demorgan simp_data stage_names s a l) with
         | ScenarioFalse => ScenarioFalse
         | ScenarioTrue =>
-          (EliminateQuantifiersHelper demorgan stage_names s b l)
+          (EliminateQuantifiersHelper demorgan simp_data stage_names s b l)
         | a' =>
-          match (EliminateQuantifiersHelper demorgan stage_names s b l) with
+          match (EliminateQuantifiersHelper demorgan simp_data stage_names s b l) with
           | ScenarioFalse => ScenarioFalse
           | ScenarioTrue => a'
           | b' => ScenarioAnd a' b'
           end
         end
       else
-        match (EliminateQuantifiersHelper demorgan stage_names s a l) with
+        match (EliminateQuantifiersHelper demorgan simp_data stage_names s a l) with
         | ScenarioTrue => ScenarioTrue
         | ScenarioFalse =>
-          (EliminateQuantifiersHelper demorgan stage_names s b l)
+          (EliminateQuantifiersHelper demorgan simp_data stage_names s b l)
         | a' =>
-          match (EliminateQuantifiersHelper demorgan stage_names s b l) with
+          match (EliminateQuantifiersHelper demorgan simp_data stage_names s b l) with
           | ScenarioTrue => ScenarioTrue
           | ScenarioFalse => a'
           | b' => ScenarioOr a' b'
@@ -1215,10 +1281,10 @@ Fixpoint EliminateQuantifiersHelper
           match x with
           | ScenarioTrue => ScenarioTrue
           | ScenarioFalse =>
-            let y' := EliminateQuantifiersHelper demorgan stage_names s f' (AddTerm l y) in
+            let y' := EliminateQuantifiersHelper demorgan simp_data stage_names s f' (AddTerm l y) in
             ScenarioName (stringOfFOLTerm y) y'
           | _ =>
-            match EliminateQuantifiersHelper demorgan stage_names s f' (AddTerm l y) with
+            match EliminateQuantifiersHelper demorgan simp_data stage_names s f' (AddTerm l y) with
             | ScenarioTrue => ScenarioTrue
             | ScenarioFalse => x
             | y' => ScenarioOr x (ScenarioName (stringOfFOLTerm y) y')
@@ -1228,10 +1294,10 @@ Fixpoint EliminateQuantifiersHelper
           match x with
           | ScenarioFalse => ScenarioFalse
           | ScenarioTrue =>
-            let y' := EliminateQuantifiersHelper demorgan stage_names s f' (AddTerm l y) in
+            let y' := EliminateQuantifiersHelper demorgan simp_data stage_names s f' (AddTerm l y) in
             ScenarioName (stringOfFOLTerm y) y'
           | _ =>
-            match EliminateQuantifiersHelper demorgan stage_names s f' (AddTerm l y) with
+            match EliminateQuantifiersHelper demorgan simp_data stage_names s f' (AddTerm l y) with
             | ScenarioFalse => ScenarioFalse
             | ScenarioTrue => x
             | y' => ScenarioAnd x (ScenarioName (stringOfFOLTerm y) y')
@@ -1246,10 +1312,10 @@ Fixpoint EliminateQuantifiersHelper
           match x with
           | ScenarioTrue => ScenarioTrue
           | ScenarioFalse =>
-            let y' := EliminateQuantifiersHelper demorgan stage_names s f' (AddTerm l y) in
+            let y' := EliminateQuantifiersHelper demorgan simp_data stage_names s f' (AddTerm l y) in
             ScenarioName (stringOfFOLTerm y) y'
           | _ =>
-            match EliminateQuantifiersHelper demorgan stage_names s f' (AddTerm l y) with
+            match EliminateQuantifiersHelper demorgan simp_data stage_names s f' (AddTerm l y) with
             | ScenarioTrue => ScenarioTrue
             | ScenarioFalse => x
             | y' => ScenarioOr x (ScenarioName (stringOfFOLTerm y) y')
@@ -1259,10 +1325,10 @@ Fixpoint EliminateQuantifiersHelper
           match x with
           | ScenarioFalse => ScenarioFalse
           | ScenarioTrue =>
-            let y' := EliminateQuantifiersHelper demorgan stage_names s f' (AddTerm l y) in
+            let y' := EliminateQuantifiersHelper demorgan simp_data stage_names s f' (AddTerm l y) in
             ScenarioName (stringOfFOLTerm y) y'
           | _ =>
-            match EliminateQuantifiersHelper demorgan stage_names s f' (AddTerm l y) with
+            match EliminateQuantifiersHelper demorgan simp_data stage_names s f' (AddTerm l y) with
             | ScenarioFalse => ScenarioFalse
             | ScenarioTrue => x
             | y' => ScenarioAnd x (ScenarioName (stringOfFOLTerm y) y')
@@ -1270,7 +1336,7 @@ Fixpoint EliminateQuantifiersHelper
           end in
       fold_left case terms (if demorgan then ScenarioTrue else ScenarioFalse)
   | FOLLet t f' =>
-      let t' := EliminateQuantifiersHelper demorgan stage_names s f' (AddTerm l t) in
+      let t' := EliminateQuantifiersHelper demorgan simp_data stage_names s f' (AddTerm l t) in
       ScenarioName (stringOfFOLTerm t) t'
   end.
 
@@ -1406,6 +1472,12 @@ Fixpoint ScenarioTreeKeepIfFalse
       | Some t'' => Some (ScenarioName n t'')
       | None => None
       end
+  | ScenarioAxiomName n t' =>
+      match ScenarioTreeKeepIfFalse s t' with
+      | Some t'' => Some (ScenarioAxiomName n t'')
+      | None => None
+      end
+  | ScenarioNotEdgeLeaf l (* Again, not going to matter for RTL. *)
   | ScenarioEdgeLeaf l =>
       match SetIntersection (FlipEdges l) (stateEdges s) with
       | [] => None
@@ -1438,6 +1510,7 @@ Fixpoint ScenarioTreeKeepIfFalse
       | (Some a', None) => None
       | (None, None) => None
       end
+  | ScenarioLoadConstraint _ _ _ => None
   | ScenarioTrue => None
   | ScenarioFalse => Some ScenarioFalse
   end.
@@ -1445,16 +1518,17 @@ Fixpoint ScenarioTreeKeepIfFalse
 Definition EliminateQuantifiers
   (stage_names : list (list string))
   (s : FOLState)
-  (f : FOLFormula)
   (l : list FOLTerm)
+  (simp_data : bool)
+  (f : FOLFormula)
   : ScenarioTree :=
-  let t := EliminateQuantifiersHelper false stage_names s f l in
+  let t := EliminateQuantifiersHelper false simp_data stage_names s f l in
   (* let t := ScenarioTreeEdgeCountGraph 5 t "QuantifiersRemoved" in *)
   let t' := SimplifyScenarioTree t in
   let t' := ScenarioTreeEdgeCountGraph 5 t' "QuantifiersRemovedAndSimplified" in
   if PrintFlag 0
   then
-    if ReducesToFalse t'
+    if andb (simp_data) (ReducesToFalse t')
     then
       let t'' :=
         match (ScenarioTreeKeepIfFalse s t) with
@@ -1494,16 +1568,16 @@ Definition eState : FOLState := mkFOLState
   [i0; i1; i2] [] [] [].
 Definition eTerms := [MicroopTerm "uop" i2].
 
-Example e0 : EliminateQuantifiers [] eState
+Example e0 : EliminateQuantifiers [] eState eTerms true
   (FOLPredicate (PredAddEdges [(("uop", (SoIInt 0, SoIInt 0)), ("uop", (SoIInt 0, SoIInt 1)), "label", "red")]))
-  eTerms =
+  =
   ScenarioEdgeLeaf ([((i2, (0, 0)), (i2, (0, 1)), "label", "red")]).
 Proof.
   auto.
 Qed.
 
-Example e1 : EliminateQuantifiers [] eState STBFwdPartial
-    [MicroopTerm "uop" i2; MicroopTerm "i" i1] =
+Example e1 : EliminateQuantifiers [] eState
+    [MicroopTerm "uop" i2; MicroopTerm "i" i1] true STBFwdPartial =
     ScenarioEdgeLeaf [
       ((i2, (0, 3)), (i1, (0, 7)), "STBFwd", "red");
       ((i1, (0, 3)), (i2, (0, 3)), "STBFwd", "red")].
@@ -1516,7 +1590,7 @@ Proof.
   auto.
 Qed.
 
-Example e3 : EliminateQuantifiers [] eState STBFwd eTerms =
+Example e3 : EliminateQuantifiers [] eState eTerms true STBFwd =
   ScenarioOr
     (ScenarioName "i = (inst 0 0 0 0)"
       (ScenarioEdgeLeaf [
@@ -1556,7 +1630,7 @@ Definition eState : FOLState := mkFOLState
 Definition eTerms : list FOLTerm := [].
 
 Example e0 :
-  EliminateQuantifiers [] eState BeforeOrAfter eTerms =
+  EliminateQuantifiers [] eState eTerms true BeforeOrAfter =
   ScenarioAnd
     (ScenarioName "i1 = (inst 1 0 0 0)"
       (ScenarioName "i2 = (inst 2 0 0 0)"
@@ -1577,6 +1651,8 @@ Fixpoint ReevaluateScenarioTree
   : ScenarioTree :=
   match t with
   | ScenarioName n t' => ScenarioName n (ReevaluateScenarioTree s t')
+  | ScenarioAxiomName n t' => ScenarioAxiomName n (ReevaluateScenarioTree s t')
+  | ScenarioNotEdgeLeaf l (* Again, doesn't matter for RTL. *)
   | ScenarioEdgeLeaf l =>
       if SetIntersectionIsEmpty (FlipEdges l) (stateEdges s)
       then ScenarioEdgeLeaf (SetDifference l (stateEdges s))
@@ -1602,6 +1678,7 @@ Fixpoint ReevaluateScenarioTree
       ScenarioAnd (ReevaluateScenarioTree s a) (ReevaluateScenarioTree s b)
   | ScenarioOr a b =>
       ScenarioOr (ReevaluateScenarioTree s a) (ReevaluateScenarioTree s b)
+  | ScenarioLoadConstraint _ _ _ => t
   | ScenarioTrue => t
   | ScenarioFalse => t
   end.
@@ -1612,6 +1689,8 @@ Fixpoint ScenarioTreeAssignLeaves
   : ScenarioTree :=
   match t with
   | ScenarioName n t' => ScenarioName n (ScenarioTreeAssignLeaves s t')
+  | ScenarioAxiomName n t' => ScenarioAxiomName n (ScenarioTreeAssignLeaves s t')
+  | ScenarioNotEdgeLeaf l (* Yet again, doesn't matter for RTL. *)
   | ScenarioEdgeLeaf l =>
       if SetIntersectionIsEmpty (FlipEdges l) (stateEdges s)
       then ScenarioTrue
@@ -1629,6 +1708,7 @@ Fixpoint ScenarioTreeAssignLeaves
       ScenarioAnd (ScenarioTreeAssignLeaves s a) (ScenarioTreeAssignLeaves s b)
   | ScenarioOr a b =>
       ScenarioOr (ScenarioTreeAssignLeaves s a) (ScenarioTreeAssignLeaves s b)
+  | ScenarioLoadConstraint _ _ _ => t
   | ScenarioTrue => ScenarioTrue
   | ScenarioFalse => ScenarioFalse
   end.
@@ -1675,6 +1755,7 @@ Fixpoint FOLExpandMacros
   | S d' =>
       match f with
       | FOLName s f' => FOLName s (FOLExpandMacros d' l f')
+      | FOLAxiomName s f' => FOLAxiomName s (FOLExpandMacros d' l f')
       | FOLExpandMacro s given_args =>
           match FindMacro s l with
           | Some (old_args, m) =>
@@ -1750,7 +1831,14 @@ Fixpoint ScenarioTreeCheckNodes
       | ScenarioFalse => ScenarioFalse
       | t'' => ScenarioName n (t'')
       end
+  | ScenarioAxiomName n t' =>
+      match ScenarioTreeCheckNodes s t' with
+      | ScenarioTrue => ScenarioTrue
+      | ScenarioFalse => ScenarioFalse
+      | t'' => ScenarioAxiomName n (t'')
+      end
   | ScenarioEdgeLeaf [] => ScenarioTrue
+  | ScenarioNotEdgeLeaf _ => ScenarioTrue (* again, doesn't matter for RTL. *)
   | ScenarioNodeLeaf [] => ScenarioTrue
   | ScenarioNotNodeLeaf [] => ScenarioFalse
   | ScenarioEdgeLeaf l => t
@@ -1760,6 +1848,7 @@ Fixpoint ScenarioTreeCheckNodes
       ScenarioAnd (ScenarioTreeCheckNodes s a) (ScenarioTreeCheckNodes s b)
   | ScenarioOr a b =>
       ScenarioOr (ScenarioTreeCheckNodes s a) (ScenarioTreeCheckNodes s b)
+  | ScenarioLoadConstraint _ _ _ => t
   | ScenarioTrue => ScenarioTrue
   | ScenarioFalse => ScenarioFalse
   end.
@@ -1897,13 +1986,16 @@ Fixpoint NegateScenarioTree
   : ScenarioTree :=
   match t with
   | ScenarioName s t' => ScenarioName s (NegateScenarioTree t')
+  | ScenarioAxiomName s t' => ScenarioAxiomName s (NegateScenarioTree t')
   | ScenarioAnd a b =>
       ScenarioOr (NegateScenarioTree a) (NegateScenarioTree b)
   | ScenarioOr a b =>
       ScenarioAnd (NegateScenarioTree a) (NegateScenarioTree b)
   | ScenarioEdgeLeaf l => fold_left FoldFlipEdge l ScenarioFalse
+  | ScenarioNotEdgeLeaf l => ScenarioEdgeLeaf l (* This is never called by SVA-generating code. *)
   | ScenarioNodeLeaf l => ScenarioNotNodeLeaf l
   | ScenarioNotNodeLeaf l => ScenarioNodeLeaf l
+  | ScenarioLoadConstraint a b c => ScenarioLoadConstraint a b (negb c)
   | ScenarioTrue => ScenarioFalse
   | ScenarioFalse => ScenarioTrue
   end.
@@ -2040,6 +2132,8 @@ Inductive FOLStatement : Set :=
 | FOLMacroDefinition : FOLMacro -> FOLStatement
 | FOLContextTerm : FOLTerm -> FOLStatement.
 
+(* Turns the FOLFormula into a set of FOLLets followed by the formula.
+   Used to add context to the formula. *)
 Fixpoint AddContext
   (core : nat)
   (c : list FOLTerm)
@@ -2070,6 +2164,26 @@ Definition EvaluateFOLStatements
   : FOLFormula :=
   EvaluateFOLStatementsHelper c [] [IntTerm "c" c] (FOLPredicate PredTrue) l.
 
+Fixpoint EvaluateFOLStatementsHelperRTL
+  (core : nat)
+  (m : list FOLMacro)
+  (c : list FOLTerm)
+  (f : list FOLFormula)
+  (l : list FOLStatement)
+  : list FOLFormula :=
+  match l with
+  | (FOLAxiom f')::t => EvaluateFOLStatementsHelperRTL core m c (f'::f) t
+  | (FOLMacroDefinition m')::t => EvaluateFOLStatementsHelperRTL core (m' :: m) c f t
+  | (FOLContextTerm c')::t => EvaluateFOLStatementsHelperRTL core m (AddTerm c c') f t
+  | [] => Map (FOLExpandMacros MacroExpansionDepth m) (Map (AddContext core c) f)
+  end.
+
+Definition EvaluateFOLStatementsRTL
+  (c : nat)
+  (l : list FOLStatement)
+  : list FOLFormula :=
+  EvaluateFOLStatementsHelperRTL c [] [IntTerm "c" c] [] l.
+
 Definition MicroarchitecturalComponent := list FOLStatement.
 
 Definition Microarchitecture := list MicroarchitecturalComponent.
@@ -2093,6 +2207,22 @@ Fixpoint BuildMicroarchitecture
   (m : Microarchitecture)
   : FOLFormula :=
   BuildMicroarchitectureHelper m 0.
+
+(* I'm assuming there's only one MicroarchitecturalComponent for the moment... *)
+Fixpoint BuildMicroarchitectureHelperRTL
+  (l : list MicroarchitecturalComponent)
+  (c : nat)
+  : list FOLFormula :=
+  match l with
+  | [] => [FOLPredicate PredFalse]
+  | [h] => EvaluateFOLStatementsRTL c h
+  | h::t => app (EvaluateFOLStatementsRTL c h) (BuildMicroarchitectureHelperRTL t (S c))
+  end.
+
+Fixpoint BuildMicroarchitectureRTL
+  (m : Microarchitecture)
+  : list FOLFormula :=
+  BuildMicroarchitectureHelperRTL m 0.
 
 Fixpoint SetNth
   {A : Type}
@@ -2135,16 +2265,299 @@ Fixpoint StageNames
   | [] => []
   end.
 
+(* Create your node mapping function and select it here based on the parameter "rtl_map_fn" provided to the binary. *)
+(* The example shown here is for a hypothetical TSO version of V-scale. It returns the same result as regular V-scale. *)
+Definition MapNode
+  (rtl_map_fn : string)
+  (n : GraphNode)
+  (bases : list (nat * nat))
+  (lc: list ScenarioTree)
+  : list string :=
+  let str_cmp := beq_string rtl_map_fn "Vscale_TSO" in
+  match str_cmp with
+  | true => MapNodeVscale n bases lc
+  | _ => MapNodeVscale n bases lc
+  end.
+
+Definition SVAInterCycles
+  (rtl_map_fn : string)
+  (bases : list (nat * nat))
+  (e : GraphEdge)
+  : list string :=
+  match e with
+  | (n1, n2, _, _) => app (app (" (~(( " :: (MapNode rtl_map_fn n1 bases [])) (" ) || ( " :: (MapNode rtl_map_fn n2 bases []))) [" ))) [*0:$] ##1 "]
+  end.
+
+Definition TranslateEdgeToRTL
+  (rtl_map_fn : string)
+  (bases : list (nat * nat))
+  (lc: list ScenarioTree)
+  (e : GraphEdge)
+  : list string :=
+  match e with
+  | (n1, n2, _, _) => app (app (app (SVAInterCycles rtl_map_fn bases e) (" ("::(MapNode rtl_map_fn n1 bases lc))) (app (") ##1 "::(SVAInterCycles rtl_map_fn bases e)) (" ("::(MapNode rtl_map_fn n2 bases lc)))) [") "]
+  end.
+
+Definition TranslateEdgeToRTLAlternate
+  (rtl_map_fn : string)
+  (bases : list (nat * nat))
+  (lc: list ScenarioTree)
+  (e : GraphEdge)
+  : list string :=
+  match e with
+  | (n1, n2, _, _) => app (app (app (SVAInterCycles rtl_map_fn bases e) (app (" (("::(MapNode rtl_map_fn n1 bases lc)) (") && (~("::(MapNode rtl_map_fn n2 bases lc))))
+                        (app ("))) ##1 "::(SVAInterCycles rtl_map_fn bases e)) (" ("::(MapNode rtl_map_fn n2 bases lc)))) [") "]
+  end.
+
+Definition ConcatSVA
+  (rtl_map_fn : string)
+  (is_and : bool)
+  (edges : list string)
+  (new_edge : list string)
+  : list string :=
+  match edges with
+  | [] => app ("( " :: new_edge) [" )"]
+  | _  => match is_and with
+          | true => app (app edges (" and ( " :: (new_edge))) [" ) "]
+          | false => app (app edges (" or ( " :: (new_edge))) [" ) "]
+          end
+  end.
+
+Definition TranslateEdgesToRTL
+  (rtl_map_fn : string)
+  (use_alt_mapping : bool)
+  (bases : list (nat * nat))
+  (l : list GraphEdge)
+  (lc: list ScenarioTree)
+  : list string :=
+  match use_alt_mapping with
+  | true => app (" ( " :: fold_left (ConcatSVA rtl_map_fn true) (Map (TranslateEdgeToRTLAlternate rtl_map_fn bases lc) l) []) [" ) "]
+  | false => app (" ( " :: fold_left (ConcatSVA rtl_map_fn true) (Map (TranslateEdgeToRTL rtl_map_fn bases lc) l) []) [" ) "]
+  end.
+
+Definition TranslateNodeToRTL
+  (rtl_map_fn : string)
+  (bases : list (nat * nat))
+  (lc: list ScenarioTree)
+  (n : GraphNode)
+  : list string :=
+  (* a number of cycles where the node doesn't happen followed by it happening. *)
+  app (app (" ((~( " :: (MapNode rtl_map_fn n bases [])) (" )) [*0:$] ##1 " :: (MapNode rtl_map_fn n bases lc))) [" ) "].
+
+Definition TranslateNodesToRTL
+  (rtl_map_fn : string)
+  (bases : list (nat * nat))
+  (comp: bool)
+  (l: list GraphNode)
+  (lc: list ScenarioTree)
+  : list string :=
+  match comp with
+  | true => app (" ( not( " :: fold_left (ConcatSVA rtl_map_fn false) (Map (TranslateNodeToRTL rtl_map_fn bases lc) l) []) [" )) "]
+  | false => app (" ( " :: fold_left (ConcatSVA rtl_map_fn true) (Map (TranslateNodeToRTL rtl_map_fn bases lc) l) []) [" ) "]
+  end.
+
+Fixpoint GetAxiomName
+  (n : nat)
+  (t : ScenarioTree)
+  : option string :=
+  match t with
+  | ScenarioName s t => GetAxiomName n t
+  | ScenarioAxiomName s t => Some (StringOf [s; "_"; ToString n])
+  | _ => None
+  end.
+
+Fixpoint GetLoadConstraints
+  (t: ScenarioTree)
+  : list ScenarioTree :=
+  match t with
+  | ScenarioName s t | ScenarioAxiomName s t => GetLoadConstraints t
+  | ScenarioAnd a b => app (GetLoadConstraints a) (GetLoadConstraints b)
+  | ScenarioOr a b => [] (* Nothing needs to get passed up beyond an OR. *)
+  | ScenarioEdgeLeaf l => []
+  | ScenarioNotEdgeLeaf l => []
+  | ScenarioNodeLeaf l => []
+  | ScenarioNotNodeLeaf l => []
+  | ScenarioLoadConstraint _ _ _ => [t]
+  | ScenarioTrue => []
+  | ScenarioFalse => []
+  end.
+
+
+Fixpoint PrintRTLAssertionsHelper
+  (rtl_map_fn : string)
+  (use_alt_mapping : bool)
+  (bases : list (nat * nat))
+  (t: ScenarioTree)
+  (lc: list ScenarioTree)
+  : list string :=
+  let is_and x := match x with
+                   | ScenarioAnd _ _ => true
+                   | ScenarioOr _ _ => false
+                   | _ => Warning false ["Something other than and/or passed to is_and!"]
+                   end
+  in
+  match t with
+  | ScenarioName s t | ScenarioAxiomName s t => PrintRTLAssertionsHelper rtl_map_fn use_alt_mapping bases t lc
+  | ScenarioAnd a b
+  | ScenarioOr a b =>
+        let lc_for_a := if is_and t then app lc (GetLoadConstraints b) else lc in
+        let lc_for_b := if is_and t then app lc (GetLoadConstraints a) else lc in
+        match (a, b) with
+        | (ScenarioLoadConstraint _ _ _, _) => if is_and t then app (" ( " :: (PrintRTLAssertionsHelper rtl_map_fn use_alt_mapping bases b lc_for_b)) [" ) "] else ["1"]
+        | (_, ScenarioLoadConstraint _ _ _) => if is_and t then app (" ( " :: (PrintRTLAssertionsHelper rtl_map_fn use_alt_mapping bases a lc_for_a)) [" ) "] else ["1"]
+        | _ => app (app (" (( " :: (PrintRTLAssertionsHelper rtl_map_fn use_alt_mapping bases a lc_for_a))
+                        ((StringOf [" )"; newline; if is_and t then "and" else "or"; newline; "( "]) :: (PrintRTLAssertionsHelper rtl_map_fn use_alt_mapping bases b lc_for_b))) [" )) "]
+        end
+  | ScenarioEdgeLeaf l => app (" ( " :: (TranslateEdgesToRTL rtl_map_fn use_alt_mapping bases l lc)) [" ) "]
+  | ScenarioNotEdgeLeaf l => app ("( not( " :: (TranslateEdgesToRTL rtl_map_fn use_alt_mapping bases l lc)) [" ) ) "]
+  | ScenarioNodeLeaf l => app (" ( " :: (TranslateNodesToRTL rtl_map_fn bases false l lc)) [" ) "]
+  | ScenarioNotNodeLeaf l => app (" ( " :: (TranslateNodesToRTL rtl_map_fn bases true l lc)) [" ) "]
+  | ScenarioLoadConstraint _ _ _ => Warning [] ["Load constraint still remains when printing RTL assertions!"]
+  | ScenarioTrue => ["1"]
+  | ScenarioFalse => ["0"]
+  end.
+
+Definition PrintRTLAssertions
+  (rtl_map_fn : string)
+  (use_alt_mapping : bool)
+  (bases : list (nat * nat))
+  (tup: nat * ScenarioTree)
+  : list string :=
+  let (n, t) := tup in
+  let name_string x :=
+  match GetAxiomName n x with
+  | None => ""
+  | Some x' => StringOf [x'; ": "]
+  end in
+  app ((name_string t) :: ("assert property (@(posedge clk) ~run_once_clk |-> ( " :: (PrintRTLAssertionsHelper rtl_map_fn use_alt_mapping bases t []))) ["));"; newline; "//---------------"; newline].
+
+Fixpoint AddNum
+  (n : nat)
+  (l: list ScenarioTree)
+  : list (nat * ScenarioTree) :=
+  match l with
+  | [] => []
+  | h::t => (n, h) :: (AddNum (S n) t)
+  end.
+
+(* Create your program mapping function and select it here based on the parameter "rtl_map_fn" provided to the binary. *)
+(* The example shown here is for a hypothetical TSO version of V-scale. It returns the same result as regular V-scale. *)
+Definition PrintRTLAssumptions
+  (bases : list (nat * nat))
+  (l : list Microop)
+  (unch_loads : list Microop)
+  (initial : list BoundaryCondition)
+  (final : list BoundaryCondition)
+  (rtl_map_fn : string)
+  : list string :=
+  let str_cmp := beq_string rtl_map_fn "Vscale_TSO" in
+  match str_cmp with
+  | true => PrintRTLAssumptionsVscale bases l unch_loads initial final rtl_map_fn
+  | _ => PrintRTLAssumptionsVscale bases l unch_loads initial final rtl_map_fn
+  end.
+
+Fixpoint GetThreadBaseIDs
+  (l : list Microop)
+  (l' : list (nat * nat))
+  : list (nat * nat) :=
+  match l with
+  | [] => l'
+  | h::t => match find (fun x => beq_nat (coreID h) (fst x)) l' with
+            | None => GetThreadBaseIDs t (((coreID h), (globalID h))::l')
+            | Some (c, b) => if blt_nat (globalID h) b then
+                                GetThreadBaseIDs t (((coreID h), (globalID h))::(removeb (fun x => beq_nat (coreID h) (fst x)) l'))
+                             else
+                                GetThreadBaseIDs t l'
+            end
+  end.
+
+Fixpoint SplitProperties
+  (bt : ScenarioTree)
+  : list ScenarioTree :=
+  match bt with
+  | ScenarioName s t => Map (fun x => ScenarioName s x) (SplitProperties t)
+  | ScenarioAxiomName s t => Map (fun x => ScenarioAxiomName s x) (SplitProperties t)
+  | ScenarioAnd a b => app (SplitProperties a) (SplitProperties b)
+  | _ => [bt]
+  end.
+
+Definition RemoveTrivialProperties
+  (t1 : list ScenarioTree)
+  (t2 : ScenarioTree)
+  : list ScenarioTree :=
+  match t2 with
+  | ScenarioTrue => t1
+  | _ => app t1 [t2]
+  end.
+
+Fixpoint GetMicroopsFromPrograms
+  (programs : list (list Microop * list ArchitectureLevelEdge * list BoundaryCondition))
+  : list (list Microop) :=
+  match programs with
+  | [] => []
+  | h::t => match h with
+            | (uops, _, _) => uops::(GetMicroopsFromPrograms t)
+            end
+  end.
+
+Fixpoint FindIntersectingLoads
+  (l1 : list Microop)
+  (l2 : list Microop)
+  : list Microop :=
+  match l1 with
+  | [] => []
+  | h::t => match find (fun x => beq_uop h x) l2 with
+            | Some h' => if SameData h h' then h::(FindIntersectingLoads t l2) else FindIntersectingLoads t l2
+            | None => FindIntersectingLoads t l2
+            end
+  end.
+
+Fixpoint FindUnchangingLoadsHelper
+  (cur : list Microop)
+  (variants : list (list Microop))
+  : list Microop :=
+  match variants with
+  | [] => cur
+  | h::t => FindUnchangingLoadsHelper (FindIntersectingLoads cur h) t
+  end.
+
+Fixpoint FindUnchangingLoads
+  (variants : list (list Microop))
+  : list Microop :=
+  let f x := match access x with
+             | Read _ _ _ _ => true
+             | _ => false
+             end in
+  match variants with
+  | [] => []
+  | h::t => match t with
+            | [] => h
+            | _ => FindUnchangingLoadsHelper (filter f h) t
+            end
+  end.
+
 Fixpoint EvaluateUHBGraphs
   (max_depth : nat)
   (m : Microarchitecture)
   (programs : list (list Microop * list ArchitectureLevelEdge * list BoundaryCondition))
   (initial : list BoundaryCondition)
+  (gen_rtl : bool)
+  (rtl_map_fn : string)
+  (use_alt_mapping : bool)
   : option (list GraphEdge * list ArchitectureLevelEdge) :=
   match programs with
   | (h_ops, h_edges, h_final)::t =>
     let s := (mkFOLState [] [] [] [] h_ops initial h_final h_edges) in
-    let t' := EliminateQuantifiers (StageNames m) s (BuildMicroarchitecture m) [] in
+    let t' := EliminateQuantifiers (StageNames m) s [] true (BuildMicroarchitecture m) in
+    let thread_bases := GetThreadBaseIDs h_ops [] in
+    let unch_loads := FindUnchangingLoads (GetMicroopsFromPrograms programs) in
+    let rtl_assum := if gen_rtl then PrintRTLAssumptions thread_bases h_ops unch_loads initial h_final rtl_map_fn else [] in
+    let rtl_assert := Map (EliminateQuantifiers (StageNames m) s [] false) (BuildMicroarchitectureRTL m) in
+    let rtl_assert := fold_left (app (A:=_)) (Map SplitProperties rtl_assert) [] in
+    let rtl_assert := fold_left (RemoveTrivialProperties) rtl_assert [] in
+    let rtl_assert := if gen_rtl then (fold_left (fun a b => app a (newline::b)) (Map (PrintRTLAssertions rtl_map_fn use_alt_mapping thread_bases) (AddNum 0 rtl_assert)) []) else [] in
+    let t' := RTLPrint t' rtl_assum in
+    let t' := RTLPrint t' rtl_assert in
     match FOL_DPLL max_depth h_edges [] (StageNames m) s t' with
     | Some s =>
         let result := Some (stateEdges s, h_edges) in
@@ -2154,7 +2567,7 @@ Fixpoint EvaluateUHBGraphs
           (GraphvizCompressedGraph "Final" (StageNames m)
             (stateEdges s) [] h_edges))
         else Comment result ["Evaluated to observable"]
-    | None => EvaluateUHBGraphs max_depth m t initial
+    | None => EvaluateUHBGraphs max_depth m t initial false rtl_map_fn use_alt_mapping
     end
   | [] =>
       if PrintFlag 0

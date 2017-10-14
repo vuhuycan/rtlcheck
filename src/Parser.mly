@@ -69,7 +69,6 @@ programs:
   | ALTERNATIVE EOL program {[$3]};
 
 program:
-  | program FINAL EOL {$1}
   | program MICROOPS EOL {$1}
   | program microop
     {let PipeGraph.Pair (PipeGraph.Pair (a1, a2), a3) = $1 in

@@ -86,5 +86,5 @@ Fixpoint find_string
   | h::t =>
     if beq_string s h
     then true
-    else false
+    else find_string s t
   end.

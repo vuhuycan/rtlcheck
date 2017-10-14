@@ -117,19 +117,19 @@ Fixpoint AddDummyUarchEdgesForPOHelper
         | (Some a', Some b') =>
             let e := ((a', (coreID a', 0)), (b', (coreID b', 0)), c, "") in
             AddDummyUarchEdgesForPOHelper t uops (e::r)
-        | (Some a', None) =>
+        | _ =>
             let result := (AddDummyUarchEdgesForPOHelper t uops r) in
-            Warning result
-              ["Could not find uop "; stringOfNat b; " while sorting graph!"]
-        | (None, Some b') =>
-            let result := (AddDummyUarchEdgesForPOHelper t uops r) in
-            Warning result
-              ["Could not find uop "; stringOfNat a; " while sorting graph!"]
-        | (None, None) =>
-            let result := (AddDummyUarchEdgesForPOHelper t uops r) in
-            Warning result
-              ["Could not find uops "; stringOfNat a; " or "; stringOfNat b;
-               " while sorting graph!"]
+            (* This really should just be a normal warning, but herd adds
+             * "po" edges to Commit nodes that it uses to represent control
+             * dependencies, and PipeCheck doesn't currently parse them
+             * properly.  e.g.,:
+             * eiid28 [label="ev28: Commit\lproc:1 poi:6\lbeq  LC00", shape="box", color="blue"];
+             * So to avoid polluting the output, make this a quieter message *)
+            if PrintFlag 1
+            then Comment result
+              ["Could not find uops "; stringOfNat a; " and/or ";
+               stringOfNat b; " during PO sort!"]
+            else result
         end
       else AddDummyUarchEdgesForPOHelper t uops r
   | [] => r

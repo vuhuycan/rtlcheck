@@ -72,6 +72,7 @@ Extract Constant List.length => "( List.length )".
 Extract Constant PrintFlag => "( BackendLinux.printFlag )".
 Extract Constant Printf => "( BackendLinux.printf )".
 Extract Constant PrintfFlush => "( BackendLinux.printfFlush )".
+Extract Constant RTLPrintInternal => "( BackendLinux.rtlPrintInternal )".
 
 Extract Constant TimeForStatusUpdate => "( BackendLinux.timeForStatusUpdate )".
 

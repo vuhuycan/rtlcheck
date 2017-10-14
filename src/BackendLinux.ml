@@ -2,9 +2,13 @@ let verbosity = ref 0
 
 let outfile = ref stdout
 
+let rtl_outfile = ref stdout
+
 let printFlag n = !verbosity >= n
 
 let printf x y = Printf.fprintf !outfile "%s" y; x
+
+let rtlPrintInternal x y = Printf.fprintf !rtl_outfile "%s" y; x
 
 let printfFlush x y = Printf.fprintf !outfile "%s" y; flush !outfile; x
 

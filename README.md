@@ -1,20 +1,22 @@
-Check out our web app!
-[Link](http://daniellustig.github.io/coatcheck)
+# RTLCheck
 
-# COATCheck
+RTLCheck is a methodology and automated tool for verifying that an RTL design
+correctly implements the microarchitectural orderings and value constraints in
+a microarchitectural ordering specification.
 
-COATCheck is a methodology and automated tool for verifying that a particular
-microarchitecture correctly implements the memory consistency model defined
-by the architectural specification.
-
-COATCheck is derived from PipeCheck and CCICheck.  Much of the terminology and
-naming comes from those tools.  See those papers/websites for details.
+RTLCheck is derived from PipeCheck, CCICheck, COATCheck, and TriCheck.  Much of the
+terminology and naming comes from those tools. See those papers/websites for
+details.
 
 http://github.com/daniellustig/pipecheck
 
 http://github.com/ymanerka/ccicheck
 
-### Citing COATCheck
+http://github.com/daniellustig/coatcheck
+
+http://github.com/ctrippel/TriCheck
+
+### Citing RTLCheck
 
 If you use our tool in your work, we would appreciate it if you cite our paper(s):
 
@@ -23,7 +25,7 @@ Daniel Lustig, Michael Pellauer, and Margaret Martonosi.  "PipeCheck:
   Models", *47th International Symposium on Microarchitecture (MICRO)*,
   Cambridge UK, December 2014.
 
-Yatin Manerkar, Daniel Lustig, Michael Pellauer, and Margaret Martonsi.
+Yatin A. Manerkar, Daniel Lustig, Michael Pellauer, and Margaret Martonsi.
   "CCICheck: Using uhb Graphs to Verify the Coherence-Consistency Interface",
   *48th International Symposium on Microarchitecture (MICRO)*,
   Honolulu, HI, December 2015.
@@ -34,22 +36,35 @@ Daniel Lustig+, Geet Sethi+, Margaret Martonosi, and Abhishek Bhattacharjee.
   Languages and Operating Systems (ASPLOS)*, Atlanta, GA, April 2016.
   (+: joint first authors)
 
+Caroline Trippel, Yatin A. Manerkar, Daniel Lustig, Michael Pellauer,
+and Margaret Martonosi. "TriCheck: Memory Model Verification at the
+Trisection of Software, Hardware, and ISA", *22nd International Conference on
+Architectural Support for Programming Languages and Operating Systems (ASPLOS)*,
+April 2017.
+
+Yatin A. Manerkar, Daniel Lustig, Margaret Martonosi, and Michael Pellauer.
+"RTLCheck: Verifying the Memory Consistency of RTL Designs", *the 50th Annual
+IEEE/ACM International Symposium on Microarchitecture (MICRO)*, October 2017.
+
 ### Contacting the authors
 
-If you have any comments, questions, or feedback, please contact Daniel Lustig
-at dlustig@princeton.edu, or visit our GitHub page,
-github.com/daniellustig/coatcheck.
+If you have any comments, questions, or feedback, please contact Yatin Manerkar
+at manerkar@princeton.edu, or visit our GitHub page,
+github.com/ymanerka/rtlcheck.
 
 ### Status
 
-At this point, COATCheck is a research tool rather than an industry-strength
+At this point, RTLCheck is a research tool rather than an industry-strength
 verification toolchain.  We do appreciate any suggestions or feedback either
 in approach or in implementation.  If you are interested in any particular
 feature, missing item, or implementation detail, please contact the authors and
 we will try to help out as best we can.
 
-## Building and Using COATCheck
+## Building and Using RTLCheck
 
+Coming soon...
+
+<!--
 ### Prerequisites
 
 COATCheck is written in Coq and extracted to OCaml for compilation to a native
@@ -119,3 +134,4 @@ Q: I get a bunch of warnings like the following:
    File "Process.ml", line 39, characters 4-122:
    Warning 21: this statement never returns (or has an unsound type.)
 A: This is expected behavior within the way we are using js_of_ocaml
+-->

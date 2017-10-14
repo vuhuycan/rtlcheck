@@ -38,11 +38,16 @@ let extra_constraints_filename = ref ""
 let do_reduction = ref true
 let ghost_auto = ref false
 let max_depth = ref 100
+let rtl_map_fn = ref "Vscale"
+let use_alt_mapping = ref false
 
 let update_input_filename s = input_filename := s
 let update_output_filename s =
   let oc = open_out s in BackendLinux.outfile := oc
+let update_rtl_output_filename s =
+  let oc = open_out s in BackendLinux.rtl_outfile := oc
 let update_uarch_filename s = uarch_filename := s
+let update_rtl_map_fn s = rtl_map_fn := s
 let update_extra_constraints_filename s = extra_constraints_filename := s
 let update_max_depth n = max_depth := n
 let update_verbosity n = BackendLinux.verbosity := n
@@ -53,9 +58,12 @@ let parse_anon s = unknown_argument s
 let speclist = [
   ("-i", Arg.String update_input_filename, "Input litmus test (.test format)");
   ("-o", Arg.String update_output_filename, "Output file (stdout otherwise)");
+  ("-t", Arg.String update_rtl_output_filename, "RTL Output file (stdout otherwise)");
+  ("-p", Arg.String update_rtl_map_fn, "RTL Mapping to use (Vscale otherwise)");
   ("-m", Arg.String update_uarch_filename, "Microarchitecture model file");
   ("-e", Arg.String update_extra_constraints_filename, "Extra constraints to add to the microarchitecture for this particular run");
   ("-r", Arg.Clear  do_reduction, "Don't perform transitive reduction");
+  ("-a", Arg.Set    use_alt_mapping, "Use alternate edge mapping");
   ("-d", Arg.Int    update_max_depth, "Max depth for DPLL search");
   ("-v", Arg.Int    update_verbosity, "Set verbosity level:
     0: Default; print final output
@@ -208,7 +216,7 @@ let processor =
 
 let first_observable_graph programs initial =
   let graph =
-    PipeGraph.evaluateUHBGraphs !max_depth processor programs initial in
+    PipeGraph.evaluateUHBGraphs !max_depth processor programs initial true !rtl_map_fn !use_alt_mapping in
 
   let observable =
     match graph with

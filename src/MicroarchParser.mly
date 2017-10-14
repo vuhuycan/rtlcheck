@@ -45,7 +45,7 @@ contextterm:
   STAGENAME INT qstring PERIOD {PipeGraph.StageNameTerm($3, $2)};
 
 axiom:
-  AXIOM qstring COLON formula PERIOD {PipeGraph.FOLName ($2, $4)};
+  AXIOM qstring COLON formula PERIOD {PipeGraph.FOLAxiomName ($2, $4)};
 
 macro:
   | DEFINEMACRO qstring args COLON formula PERIOD

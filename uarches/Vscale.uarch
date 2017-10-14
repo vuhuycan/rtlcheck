@@ -1,0 +1,122 @@
+% Legend:
+% "/\" = AND
+% "\/" = OR
+% "~"  = NOT
+% "=>" = IMPLIES
+% "%"  = COMMENT
+%
+% Graph node = (instruction, (pipeline, stage number))
+% Graph edge = (node, node, label)
+%
+% "c" is predefined to be the core ID
+
+StageName 0 "Fetch".
+StageName 1 "DecodeExecute".
+StageName 2 "Writeback".
+%StageName 3 "MemoryHierarchy".
+
+DefineMacro "NoWritesToSamePABetweenSourceAndRead":
+  % Read from "w", and there must not exist any writes w' in between w and i
+  exists microop "w", (
+    IsAnyWrite w /\
+    SamePhysicalAddress w i /\
+    SameData w i /\
+    AddEdge ((w, Writeback), (i, Writeback), "rf", "red") /\
+    ~(exists microop "w'",
+      IsAnyWrite w' /\ SamePhysicalAddress i w' /\ ~SameMicroop w w' /\
+      EdgesExist [((w , Writeback), (w', Writeback), "");
+                  ((w', Writeback), (i, Writeback), "")])).
+
+DefineMacro "BeforeOrAfterEveryWriteToSamePA":
+  % Either before or after every write to the same physical address
+  forall microop "w", (
+    (IsAnyWrite w /\ SamePhysicalAddress w i) =>
+    (AddEdge ((w, DecodeExecute), (i, DecodeExecute), "wsrf", "crimson") \/
+     AddEdge ((i, DecodeExecute), (w, DecodeExecute), "fr", "red"))).
+
+DefineMacro "BeforeAllWrites":
+  % Read occurs before all writes to same PA & Data
+  DataFromInitialStateAtPA i /\
+  forall microop "w", (
+    (IsAnyWrite w /\ SamePhysicalAddress w i /\ ~SameMicroop i w) =>
+    AddEdge ((i, Writeback), (w, Writeback), "fr", "red")).
+
+DefineMacro "WriteIsBeforeFinal":
+  forall microop "w",
+  forall microop "w'",
+  (IsAnyWrite w /\ IsAnyWrite w' /\ SamePhysicalAddress w w' /\
+     ~SameMicroop w w' /\ DataFromFinalStateAtPA w') =>
+  AddEdge ((w, Writeback), (w', Writeback), "ws_final", "red").
+
+% This, in combination with BeforeOrAfterEveryWriteToSamePA establishes the
+% required total order on writebacks...
+DefineMacro "WriteSerialization":
+forall microops "i2",
+    ( ~(SameMicroop i i2) /\ IsAnyWrite i2 /\ SamePhysicalAddress i i2) =>
+    (AddEdge ((i, DecodeExecute), (i2, DecodeExecute), "ws", "red") \/
+     AddEdge ((i2, DecodeExecute), (i, DecodeExecute), "ws", "red")).
+
+Axiom "Reads":
+forall microops "i",
+OnCore c i =>
+IsAnyRead i =>
+AddEdges [((i, (c, Fetch)),      (i, (c, DecodeExecute)),     "path");
+          ((i, (c, DecodeExecute)),     (i, (c, Writeback)),    "path")].
+
+Axiom "Reads2":
+forall microops "i",
+OnCore c i =>
+IsAnyRead i =>
+(
+      ExpandMacro BeforeAllWrites
+      \/
+      (
+        ExpandMacro NoWritesToSamePABetweenSourceAndRead
+        /\
+        ExpandMacro BeforeOrAfterEveryWriteToSamePA
+      )
+).
+
+Axiom "Writes":
+forall microops "i",
+OnCore c i =>
+IsAnyWrite i =>
+AddEdges [((i, (c, Fetch)),      (i, (c, DecodeExecute)),     "path");
+          ((i, (c, DecodeExecute)),     (i, (c, Writeback)),    "path")
+          ].
+
+Axiom "Writes2":
+forall microops "i",
+OnCore c i =>
+IsAnyWrite i =>
+(
+  ExpandMacro WriteIsBeforeFinal
+).
+
+Axiom "Writes3":
+forall microops "i",
+OnCore c i =>
+IsAnyWrite i =>
+(
+  ExpandMacro WriteSerialization
+).
+
+Axiom "PO_Fetch":
+forall microops "i1",
+forall microops "i2",
+(OnCore c i1 /\ OnCore c i2 /\ ProgramOrder i1 i2) =>
+AddEdge ((i1, (c, Fetch)), (i2, (c, Fetch)), "PO", "blue").
+
+Axiom "DecodeExecute_stage_is_in_order":
+forall microops "i1",
+forall microops "i2",
+(OnCore c i1 /\ OnCore c i2 /\ ~SameMicroop i1 i2 /\ ProgramOrder i1 i2) =>
+EdgeExists ((i1, (c, Fetch)),  (i2, (c, Fetch)), "") =>
+AddEdge ((i1, (c, DecodeExecute)), (i2, (c, DecodeExecute)), "PPO", "darkgreen").
+
+Axiom "Writeback_stage_is_in_order":
+forall microops "i1",
+forall microops "i2",
+(OnCore c i1 /\ OnCore c i2 /\ ~SameMicroop i1 i2 /\ ProgramOrder i1 i2) =>
+EdgeExists ((i1, (c, DecodeExecute)),  (i2, (c, DecodeExecute)), "") =>
+AddEdge ((i1, (c, Writeback)), (i2, (c, Writeback)), "PPO", "darkgreen").
