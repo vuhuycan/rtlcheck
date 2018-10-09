@@ -129,6 +129,7 @@ If you wish to work with Multi-V-scale, its RTL source is available at http://gi
 You can clone it to the machine on which you will be running JasperGold,
 and modify the `ROOT_PATH` variable in the Tcl script template
 to point to the root directory of your Multi-V-scale repository.
+You should use the `multicore` branch of the Multi-V-scale repository.
 If using a design other than Multi-V-scale, you should modify one of these templates to point to the
 source directories and files of your RTL design. You can also change the engines used in the verification.
 2.  We have also provided a template for job scripts (which add the generated SVA properties to the RTL
@@ -180,3 +181,9 @@ Q: I get a bunch of warnings like the following:
    File "Process.ml", line 39, characters 4-122:
    Warning 21: this statement never returns (or has an unsound type.)
 A: This is expected behavior within the way we are using js_of_ocaml
+
+Q: What is the "alternate mapping" (-a switch)?
+A: The default mapping of microarchitectural edges to SVA generates properties which allow the events defined
+   by the source and destination nodes to occur at the same cycle. If such behaviour is considered buggy, the
+   alternate mapping which generates properties that do not allow source and destination nodes to occur at the
+   same time should be used.
